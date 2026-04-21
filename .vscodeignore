@@ -1,0 +1,12 @@
+.vscode/**
+.claude/**
+node_modules/**
+src/**
+webview/**
+vendor/**
+**/*.map
+**/*.ts
+tsconfig.json
+.gitignore
+**/.DS_Store
+*.vsix

@@ -1,0 +1,22 @@
+{
+  "name": "@primeta/persona-core",
+  "version": "0.0.1",
+  "description": "Shared VRM persona rendering core — Three.js scene, facial expressions, lip sync, FBX retargeting",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./constants": "./src/constants.js",
+    "./facial": "./src/facial.js",
+    "./retarget": "./src/retarget.js",
+    "./procedural": "./src/procedural.js",
+    "./lip-sync": "./src/lip-sync.js",
+    "./tts-client": "./src/tts-client.js",
+    "./text": "./src/text.js",
+    "./avatar-controller": "./src/avatar-controller.js"
+  },
+  "peerDependencies": {
+    "three": ">=0.160.0",
+    "@pixiv/three-vrm": ">=3.0.0"
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "name": "primeta-avatar",
+  "displayName": "Primeta Avatar",
+  "description": "3D VRM avatar overlay with TTS lip-sync for Claude Code",
+  "version": "0.1.0",
+  "publisher": "primeta",
+  "license": "MIT",
+  "icon": "assets/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Primeta-AI/vscode-primeta-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Primeta-AI/vscode-primeta-extension/issues"
+  },
+  "homepage": "https://primeta.ai",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ai",
+    "avatar",
+    "vrm",
+    "tts",
+    "mcp"
+  ],
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "primeta.showAvatar",
+        "title": "Primeta: Show Avatar"
+      },
+      {
+        "command": "primeta.hideAvatar",
+        "title": "Primeta: Hide Avatar"
+      }
+    ],
+    "configuration": {
+      "title": "Primeta Avatar",
+      "properties": {
+        "primeta.serverUrl": {
+          "type": "string",
+          "default": "https://primeta.ai",
+          "description": "Primeta server URL"
+        },
+        "primeta.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "Bridge API token (from Primeta Settings page)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "npm run build:ext && npm run build:webview",
+    "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "build:webview": "esbuild webview/avatar-renderer.js --bundle --outfile=dist/webview.js --format=iife --platform=browser --sourcemap --define:global=globalThis",
+    "watch": "npm run watch:ext & npm run watch:webview",
+    "watch:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
+    "watch:webview": "esbuild webview/avatar-renderer.js --bundle --outfile=dist/webview.js --format=iife --platform=browser --sourcemap --define:global=globalThis --watch",
+    "package": "npm run build && vsce package"
+  },
+  "dependencies": {
+    "@primeta/persona-core": "file:./vendor/persona-core",
+    "three": "^0.170.0",
+    "@pixiv/three-vrm": "^3.3.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.4.0"
+  }
+}
