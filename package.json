@@ -1,8 +1,8 @@
 {
   "name": "primeta",
   "displayName": "Primeta",
-  "description": "3D VRM avatar overlay with TTS lip-sync for Claude Code",
-  "version": "0.2.0",
+  "description": "Companion panel for Primeta's MCP server — your MCP client's responses rendered as a speaking, emoting 3D avatar in VS Code.",
+  "version": "0.2.1",
   "publisher": "PrimetaAI",
   "license": "MIT",
   "icon": "assets/icon.png",
@@ -67,12 +67,12 @@
       {
         "view": "primeta.home",
         "when": "!primeta.hasApiToken",
-        "contents": "A 3D avatar companion for Claude Code — watch your assistant speak and emote as you work.\n\nTo get started, copy your API token from the [primeta.ai settings page](https://primeta.ai/settings) and paste it here.\n\n[Set API Token](command:primeta.setApiToken)"
+        "contents": "A 3D avatar companion for your MCP client — the panel renders responses from a Primeta MCP session (`https://primeta.ai/mcp`) driven by Claude Code, Claude Desktop, Cursor, etc.\n\nTo get started:\n\n1. Connect Primeta as an MCP server in your client — [setup guide](https://primeta.ai/docs/mcp).\n2. Paste your API token from [primeta.ai/settings#connections](https://primeta.ai/settings#connections) below.\n\n[Set API Token](command:primeta.setApiToken)"
       },
       {
         "view": "primeta.home",
         "when": "primeta.hasApiToken",
-        "contents": "Open your persona to see your AI assistant come to life.\n\n[Show Persona](command:primeta.showPersona)\n[Hide Persona](command:primeta.hidePersona)\n\nPrimeta auto-connects to a Claude Code bridge matching your workspace folder name. If none is running, [set up the MCP bridge](https://primeta.ai/docs/mcp).\n\n[Change API Token](command:primeta.setApiToken)\n\nNeed a new token? Get one from your [primeta.ai settings page](https://primeta.ai/settings)."
+        "contents": "Open your persona to see your AI assistant come to life.\n\n[Show Persona](command:primeta.showPersona)\n[Hide Persona](command:primeta.hidePersona)\n\nPrimeta auto-connects to a Claude Code bridge matching your workspace folder name. If none is running, [set up the MCP bridge](https://primeta.ai/docs/mcp).\n\n[Change API Token](command:primeta.setApiToken)\n\nNeed a new token? Get one from [primeta.ai/settings#connections](https://primeta.ai/settings#connections)."
       }
     ],
     "configuration": {

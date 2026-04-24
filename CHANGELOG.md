@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.1] - 2026-04-24
+
+### Changed
+
+- README rewritten around the MCP as the prerequisite — tagline reframes the extension as the companion panel for Primeta's MCP server, and Getting Started now leads with `.mcp.json` setup (OAuth or Bearer token) before the extension install
+- Added a "How it works" section with a flow diagram from MCP client → `primeta.ai/mcp` → this extension
+- Marketplace description (`package.json`) rewritten to match the companion framing
+- First-run sidebar copy now walks the user through MCP setup first, then API token
+- Token links throughout point at `primeta.ai/settings#connections` (was: `primeta.ai/settings`)
+
 ## [0.2.0] - 2026-04-24
 
 ### Added

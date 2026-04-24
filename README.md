@@ -1,8 +1,8 @@
 # Primeta
 
-3D VRM avatar overlay with text-to-speech lip-sync for Claude Code in VS Code.
+The VS Code avatar panel for Primeta's MCP server — your MCP client's responses rendered as a 3D VRM character that speaks and emotes.
 
-Primeta brings your AI assistant to life with an animated 3D character that speaks, emotes, and reacts in real time as you work.
+This extension is the avatar renderer half of Primeta. The other half — and the one doing the actual work — is Primeta's remote MCP server at `https://primeta.ai/mcp`, which you connect to from an MCP client like Claude Code, Claude Desktop, or Cursor. When your client calls Primeta tools (`primeta_send`, `primeta_set_persona`, `primeta_list_personas`, …), the activity lands on the Primeta server; this extension subscribes to that activity over WebSocket and renders it as a speaking, emoting avatar in your editor. **Without an MCP connection to Primeta, the panel has nothing to render.**
 
 ## Features
 
@@ -10,8 +10,16 @@ Primeta brings your AI assistant to life with an animated 3D character that spea
 - **Text-to-Speech with Lip-Sync** — Hear responses spoken aloud with phoneme-accurate mouth animation
 - **Emotion-Driven Expressions** — Avatar reacts with facial expressions: joy, surprise, anger, sadness, thinking, and more
 - **Persona Switching** — Choose from multiple AI personas, each with their own model and personality
-- **Real-Time Bridge Connection** — Connects to your Primeta server via ActionCable WebSocket for live communication
+- **Real-Time Bridge Connection** — Subscribes to your Primeta server via ActionCable WebSocket for live MCP activity
 - **Idle Animations** — Procedural breathing, swaying, and blinking for a natural presence
+
+## How it works
+
+```
+Your MCP client  ──(MCP tool call)──▶  https://primeta.ai/mcp  ──(WebSocket)──▶  this extension (renders avatar)
+```
+
+Primeta supports the standard remote MCP spec — OAuth for interactive clients, Bearer tokens for headless or committable configs. This extension is transport-agnostic; it just subscribes to your account's MCP activity and renders the messages.
 
 ## Commands
 
@@ -19,8 +27,9 @@ Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and run:
 
 | Command | Description |
 |---------|-------------|
-| `Primeta: Show Avatar` | Open the avatar panel |
-| `Primeta: Hide Avatar` | Close the avatar panel |
+| `Primeta: Show Persona` | Open the avatar panel |
+| `Primeta: Hide Persona` | Close the avatar panel |
+| `Primeta: Set API Token` | Paste your Primeta API token |
 
 ## Configuration
 
@@ -33,14 +42,40 @@ Configure the extension in VS Code Settings (`Cmd+,` / `Ctrl+,`) under **Primeta
 
 ## Getting Started
 
-1. Install the extension from the VS Code Marketplace
-2. Click the **Primeta** icon in the activity bar (left sidebar)
-3. Click **Set API Token** and paste the token from your [primeta.ai settings page](https://primeta.ai/settings)
-4. Click **Show Persona**
+1. **Connect Primeta as an MCP server in your client.** Pick whichever fits your workflow:
 
-For spoken responses driven by Claude Code, set up the MCP bridge by following the [MCP setup guide](https://primeta.ai/docs/mcp). Prefer the Command Palette? `Primeta: Set API Token` and `Primeta: Show Persona` do the same thing. The server URL defaults to `https://primeta.ai`; change it under Settings → Primeta if you run a self-hosted instance.
+   **OAuth (recommended for Claude Desktop, Cursor, Zed, etc.):**
+   ```json
+   {
+     "mcpServers": {
+       "primeta": {
+         "type": "http",
+         "url": "https://primeta.ai/mcp"
+       }
+     }
+   }
+   ```
+   First connection opens a browser to log in. Full guide: [OAuth MCP setup](https://primeta.ai/docs/oauth-mcp).
 
-The avatar panel will open beside your editor and look for a Primeta bridge matching your workspace folder name. Once connected, your AI assistant's responses will appear as spoken, animated messages through the avatar.
+   **Token-based (committable configs, headless, or clients without OAuth):**
+   ```json
+   {
+     "mcpServers": {
+       "primeta": {
+         "type": "http",
+         "url": "https://primeta.ai/mcp",
+         "headers": {
+           "Authorization": "Bearer YOUR_PRIMETA_API_TOKEN"
+         }
+       }
+     }
+   }
+   ```
+   Grab the token from [primeta.ai/settings#connections](https://primeta.ai/settings#connections). Full guide: [Token MCP setup](https://primeta.ai/docs/token-mcp).
+
+2. **Install this extension** from the VS Code Marketplace.
+3. **Click the Primeta icon** in the activity bar, click **Set API Token**, and paste the same token from [primeta.ai/settings#connections](https://primeta.ai/settings#connections) — the extension uses it to authenticate its WebSocket subscription.
+4. **Click Show Persona.** The panel opens and subscribes to your account's MCP activity — the next time your MCP client calls `primeta_send`, the message is spoken and animated through the avatar.
 
 If your account has voice configured, the panel will show a one-time **Click to enable voice** prompt — VS Code's webview (like any browser) requires a user click before it will play audio. Click anywhere on the prompt to enable speech for the session.
 
@@ -48,7 +83,8 @@ You can drag inside the avatar panel to rotate the camera around the model and u
 
 ## Requirements
 
-- A Primeta account with an API token (required — the extension is a client for the Primeta server, not a standalone tool)
+- An MCP client connected to `https://primeta.ai/mcp` via OAuth or Bearer token (this is the prerequisite — see Getting Started)
+- A Primeta account with an API token
 - Network access to your Primeta server
 - A configured TTS provider on your Primeta account if you want spoken responses (the avatar still animates and emotes without TTS)
 
