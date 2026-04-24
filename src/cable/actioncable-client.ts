@@ -56,12 +56,15 @@ export class ActionCableClient {
 
     if (!apiToken) return;
 
-    const wsUrl = serverUrl
+    const origin = serverUrl.replace(/\/$/, '');
+    const wsUrl = origin
       .replace(/^https:/, 'wss:')
-      .replace(/^http:/, 'ws:')
-      .replace(/\/$/, '') + `/cable?bridge_token=${apiToken}`;
+      .replace(/^http:/, 'ws:') + `/cable?bridge_token=${apiToken}`;
 
-    this.ws = new WebSocket(wsUrl, ['actioncable-v1-json']);
+    // Rails' ActionCable checks the Origin header against
+    // `allowed_request_origins`; Node's ws library doesn't send one by
+    // default, so the upgrade comes back as 404. Pass it explicitly.
+    this.ws = new WebSocket(wsUrl, ['actioncable-v1-json'], { origin });
 
     this.ws.on('open', () => {});
 
@@ -72,12 +75,18 @@ export class ActionCableClient {
       } catch {}
     });
 
-    this.ws.on('close', () => {
+    this.ws.on('close', (code: number, reason: Buffer) => {
+      console.error('[Primeta cable] WS close', code, reason?.toString());
       this.scheduleReconnect();
     });
 
-    this.ws.on('error', () => {
+    this.ws.on('error', (err: Error) => {
+      console.error('[Primeta cable] WS error', err.message);
       this.ws?.close();
+    });
+
+    this.ws.on('unexpected-response', (_req: unknown, res: { statusCode?: number }) => {
+      console.error('[Primeta cable] WS unexpected-response', res?.statusCode);
     });
   }
 
@@ -95,7 +104,19 @@ export class ActionCableClient {
       return;
     }
 
-    if (msg.type === 'ping' || msg.type === 'confirm_subscription') return;
+    if (msg.type === 'ping') return;
+
+    if (msg.type === 'confirm_subscription') return;
+
+    if (msg.type === 'reject_subscription') {
+      console.error('[Primeta cable] REJECT_SUBSCRIPTION', msg.identifier);
+      return;
+    }
+
+    if (msg.type === 'disconnect') {
+      console.error('[Primeta cable] disconnect', msg.reason, 'reconnect:', msg.reconnect);
+      return;
+    }
 
     const payload = msg.message;
     if (!payload?.type) return;

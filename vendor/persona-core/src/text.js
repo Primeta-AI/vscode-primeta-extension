@@ -46,17 +46,32 @@ export function stripTags(text) {
 
 /**
  * Sanitize text for TTS playback.
- * Removes code blocks, markdown formatting, and normalizes whitespace.
+ *
+ * Only converts `[tag]` → `(tag)` when `tag` is in `allowedTags` — so the
+ * voice only emotes in ways this persona's face can also render. Unknown
+ * or persona-unsupported tags are dropped entirely rather than rendered
+ * as literal bracketed speech. Pass `null` to allow every tag through
+ * unfiltered (used for generic sanitization outside a persona context).
  *
  * @param {string} text
+ * @param {Set<string>|Array<string>|null} [allowedTags] — lowercase tag names the persona supports
  * @returns {string}
  */
-export function sanitizeForTts(text) {
+export function sanitizeForTts(text, allowedTags) {
+  const set = allowedTags instanceof Set
+    ? allowedTags
+    : (Array.isArray(allowedTags) ? new Set(allowedTags.map(t => t.toLowerCase())) : null)
   return text
     .replace(/```[\s\S]*?```/g, '')           // code blocks
     .replace(/`[^`]+`/g, '')                   // inline code
     .replace(/\[spoken\]|\[\/spoken\]/gi, '')  // spoken tags
-    .replace(/\[(\w+)(?::\d+(?:\.\d+)?)?\]/g, '($1)')  // [happy] or [happy:0.8] → (happy)
+    .replace(/\[([^\]]+)\]/g, (_, inner) => {
+      const clean = inner.trim().toLowerCase()
+      if (clean.startsWith('/')) return ''     // closing tag
+      const tag = clean.split(':')[0]
+      if (set === null) return `(${tag})`       // legacy: unconditional convert
+      return set.has(tag) ? `(${tag})` : ''
+    })
     .replace(/#{1,6}\s+/g, '')                 // markdown headings
     .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')  // bold/italic
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')   // markdown links → text
@@ -72,12 +87,13 @@ export function sanitizeForTts(text) {
  * Extracts emotion, spoken text, and sanitized TTS text in one pass.
  *
  * @param {string} rawText
+ * @param {{ allowedTags?: Set<string>|Array<string>|null }} [options]
  * @returns {{ emotion: string|null, intensity: number, displayText: string, ttsText: string }}
  */
-export function processMessage(rawText) {
+export function processMessage(rawText, options = {}) {
   const emotion = extractEmotionTag(rawText)
   const spoken = extractSpokenText(rawText)
-  const ttsText = sanitizeForTts(spoken)
+  const ttsText = sanitizeForTts(spoken, options.allowedTags)
   const displayText = stripTags(rawText)
 
   return {

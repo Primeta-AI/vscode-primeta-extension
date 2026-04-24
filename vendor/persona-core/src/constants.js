@@ -3,6 +3,9 @@ export const EMOTION_DECAY_DELAY = 4.0
 export const EMOTION_DECAY_SPEED = 1.5
 export const EMOTION_LERP_SPEED = 3.0
 export const BLINK_DURATION = 0.15
+// Saccades: small random eye movements every 1-3s so the gaze never holds
+// perfectly still. Lerp is fast-but-not-instant — reads as an involuntary dart.
+export const SACCADE_LERP_SPEED = 6.0
 
 export const MOUTH_EXPRESSIONS = ['aa', 'ee', 'ih', 'oh', 'ou']
 export const FACE_EXPRESSIONS = ['happy', 'sad', 'angry', 'surprised', 'relaxed']

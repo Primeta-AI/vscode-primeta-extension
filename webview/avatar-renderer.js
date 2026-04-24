@@ -14,41 +14,133 @@ import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 import {
   AvatarController,
-  TtsClient,
   retargetClip,
+  fixupLookAtApplier,
+  extendPartialSpringChains,
+  MOUTH_EXPRESSIONS,
+  PHONEME_MAP,
 } from '@primeta/persona-core';
+
+// VRM 0.x uses uppercase single-letter viseme names
+const VRM0_MOUTH_MAP = { aa: 'A', ee: 'E', ih: 'I', oh: 'O', ou: 'U' };
+const LERP_SPEED = 12;
+
+function buildMouthNameMap(manager) {
+  if (!manager) return {};
+  const has = (name) => { try { return manager.getExpression(name) != null; } catch { return false; } };
+  const map = {};
+  for (const expr of MOUTH_EXPRESSIONS) {
+    if (has(expr)) map[expr] = expr;
+    else if (VRM0_MOUTH_MAP[expr] && has(VRM0_MOUTH_MAP[expr])) map[expr] = VRM0_MOUTH_MAP[expr];
+  }
+  return map;
+}
+
+// Play TTS audio via AudioBufferSourceNode (Web Audio) instead of an
+// <audio> element. Persona-core's speakWithLipSync uses <audio> to keep
+// iOS Safari in "playback" session mode, but VS Code's webview is desktop
+// Chromium — <audio>.play() hits the autoplay policy on every call, even
+// with sticky activation. AudioBufferSourceNode only requires a resumed
+// AudioContext, which the unlock overlay already provides.
+let currentTtsSource = null;
+let currentTtsAnimFrame = null;
+
+function cancelTts() {
+  if (currentTtsSource) {
+    try { currentTtsSource.stop(); } catch {}
+    currentTtsSource = null;
+  }
+  if (currentTtsAnimFrame) {
+    cancelAnimationFrame(currentTtsAnimFrame);
+    currentTtsAnimFrame = null;
+  }
+}
+
+async function playBufferedTts({ audioBase64, phonemes, vrm, avatar, audioCtx, playAnimation, onDone }) {
+  cancelTts();
+
+  const raw = atob(audioBase64);
+  const buffer = new ArrayBuffer(raw.length);
+  const view = new Uint8Array(buffer);
+  for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
+
+  const decoded = await audioCtx.decodeAudioData(buffer);
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = decoded;
+  source.connect(audioCtx.destination);
+  currentTtsSource = source;
+
+  const manager = vrm?.expressionManager;
+  const mouthMap = buildMouthNameMap(manager);
+  const resolveName = (expr) => mouthMap[expr] || expr;
+
+  const timeline = (phonemes || []).map(({ character, start, end }) => ({
+    start, end, targets: PHONEME_MAP[character.toLowerCase()] || {},
+  }));
+
+  const current = {};
+  for (const expr of MOUTH_EXPRESSIONS) current[expr] = 0;
+
+  playAnimation('talking');
+  if (supportsLipSyncSuppress && avatar?.facial) avatar.facial.suppressMouthOverride = true;
+
+  let playStart = null;
+  let lastFrame = performance.now() / 1000;
+
+  function tick() {
+    if (source !== currentTtsSource) return;
+    const now = performance.now() / 1000;
+    const dt = Math.min(now - lastFrame, 0.05);
+    lastFrame = now;
+    const elapsed = playStart !== null ? (now - playStart) : 0;
+    const lerpFactor = 1 - Math.exp(-LERP_SPEED * dt);
+
+    let target = {};
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      if (elapsed >= timeline[i].start) {
+        target = elapsed > timeline[i].end ? {} : timeline[i].targets;
+        break;
+      }
+    }
+
+    if (manager) {
+      for (const expr of MOUTH_EXPRESSIONS) {
+        const goal = target[expr] || 0;
+        current[expr] = current[expr] + (goal - current[expr]) * lerpFactor;
+        if (current[expr] < 0.001) current[expr] = 0;
+        manager.setValue(resolveName(expr), current[expr]);
+      }
+    }
+
+    currentTtsAnimFrame = requestAnimationFrame(tick);
+  }
+
+  source.onended = () => {
+    if (source !== currentTtsSource) return;
+    currentTtsSource = null;
+    if (currentTtsAnimFrame) cancelAnimationFrame(currentTtsAnimFrame);
+    currentTtsAnimFrame = null;
+    if (manager) for (const expr of MOUTH_EXPRESSIONS) manager.setValue(resolveName(expr), 0);
+    if (supportsLipSyncSuppress && avatar?.facial) avatar.facial.suppressMouthOverride = false;
+    playAnimation('idle');
+    onDone?.();
+  };
+
+  source.start();
+  playStart = performance.now() / 1000;
+  currentTtsAnimFrame = requestAnimationFrame(tick);
+}
 
 // State
 let renderer, scene, camera, controls, clock, vrm;
-let disposed = false;
 let modelBox = null;
 const avatar = new AvatarController(THREE);
 let audioCtx = null;
-let pendingTokenResolve = null;
-
-const ttsClient = new TtsClient({
-  playAnimation: (name) => avatar.playAnimation(name),
-  onSpeechDone: () => {
-    vscode.postMessage({ type: 'speechDone' });
-  },
-  onTokenExpired: () => requestTtsToken(),
-});
-
-// Request a TTS token from the extension host.
-// Returns a promise that resolves when the token arrives via 'ttsToken' message.
-function requestTtsToken() {
-  return new Promise((resolve) => {
-    pendingTokenResolve = resolve;
-    vscode.postMessage({ type: 'requestTtsToken' });
-    // Timeout after 10s so we don't hang forever
-    setTimeout(() => {
-      if (pendingTokenResolve === resolve) {
-        pendingTokenResolve = null;
-        resolve();
-      }
-    }, 10000);
-  });
-}
+let muted = true;
+let audioUnlocked = false;
+let ttsConfigured = false;
+let supportsLipSyncSuppress = true;
 
 const vscode = acquireVsCodeApi();
 
@@ -71,9 +163,11 @@ function init() {
   controls.target.set(0, 1.35, 0);
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
+  controls.enableRotate = true;
+  controls.enableZoom = true;
   controls.enablePan = false;
-  controls.enableRotate = false;
-  controls.enableZoom = false;
+  controls.minDistance = 0.5;
+  controls.maxDistance = 8.0;
   controls.update();
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.7));
@@ -103,7 +197,6 @@ function init() {
 // --- Render Loop ---
 
 function animate() {
-  if (disposed) return;
   requestAnimationFrame(animate);
 
   const delta = clock.getDelta();
@@ -133,8 +226,6 @@ function loadModelFromBase64(modelBase64, animationData) {
   const buffer = base64ToArrayBuffer(modelBase64);
 
   loader.parse(buffer, '', async (gltf) => {
-    if (disposed) return;
-
     const loaded = gltf.userData.vrm;
     if (!loaded) {
       console.warn('[persona] VRM not found in userData');
@@ -154,6 +245,9 @@ function loadModelFromBase64(modelBase64, animationData) {
     VRMUtils.combineSkeletons(gltf.scene);
     if (VRMUtils.combineMorphs) VRMUtils.combineMorphs(vrm);
 
+    fixupLookAtApplier(vrm);
+    extendPartialSpringChains(vrm);
+
     vrm.scene.position.set(0, 0, 0);
     scene.add(vrm.scene);
 
@@ -165,6 +259,16 @@ function loadModelFromBase64(modelBase64, animationData) {
     vrm.scene.traverse((obj) => { obj.frustumCulled = false; });
 
     avatar.initModel(vrm, clock, mixer);
+
+    // Detect persona-core API drift once per model load. The lip-sync path
+    // toggles avatar.facial.suppressMouthOverride to hand the mouth off
+    // between emotion-driven blendshapes and viseme-driven animation; if a
+    // future persona-core sync renames or removes the flag, fall through
+    // silently with a single warning instead of a per-frame TypeError.
+    supportsLipSyncSuppress = !!(avatar.facial && 'suppressMouthOverride' in avatar.facial);
+    if (!supportsLipSyncSuppress) {
+      console.warn('[persona] avatar.facial.suppressMouthOverride missing — persona-core API may have changed; lip-sync will not suppress emotion mouth shapes');
+    }
 
     VRMUtils.rotateVRM0(vrm);
 
@@ -180,7 +284,9 @@ function loadModelFromBase64(modelBase64, animationData) {
     }
 
     if (avatar.anims.hasAnimations) {
-      if (avatar.anims.actions.idle) avatar.anims.play('idle');
+      // System-state animations are registered with "__"-prefixed keys
+      // (__idle, __talking, …) by /api/config's build_animation_urls.
+      if (avatar.anims.actions.__idle) avatar.anims.play('__idle');
     } else {
       avatar.setupProcedural();
     }
@@ -209,13 +315,21 @@ async function loadFBXAnimationsFromBase64(animationData) {
         if (clip) {
           clip.name = name;
           avatar.anims.registerAction(name, clip);
+        } else {
+          console.warn('[persona] retargetClip returned null for', name);
         }
+      } else {
+        console.warn('[persona] FBX for', name, 'contained no animations');
       }
-    } catch { /* skip failed animations */ }
+    } catch (err) {
+      // Was previously swallowed, which hid broken URLs / malformed clips.
+      console.error('[persona] FBX load failed for', name, err);
+    }
   }
 
   if (avatar.anims.hasAnimations && !avatar.anims.currentAction) {
-    if (avatar.anims.actions.idle) avatar.anims.play('idle');
+    // System-state key convention — see comment in loadModel().
+    if (avatar.anims.actions.__idle) avatar.anims.play('__idle');
   }
 }
 
@@ -284,7 +398,7 @@ function hideWaiting() {
 // --- Cancel speech ---
 
 function cancelAllSpeech() {
-  ttsClient.cancel();
+  cancelTts();
   avatar.playAnimation('idle');
 }
 
@@ -302,6 +416,8 @@ window.addEventListener('message', (event) => {
     case 'config':
       hideWaiting();
       setStatus(`Loading ${msg.persona}...`);
+      ttsConfigured = !!msg.ttsConfigured;
+      if (ttsConfigured && !audioUnlocked) showAudioUnlock();
       if (msg.modelBase64) {
         loadModelFromBase64(msg.modelBase64, msg.animationData || {});
       }
@@ -309,25 +425,25 @@ window.addEventListener('message', (event) => {
     case 'status':
       setStatus(msg.text);
       break;
-    case 'speak':
-      if (msg.text) {
-        ttsClient.speak(msg.text, vrm);
-      }
-      break;
-    case 'ttsToken':
-      if (msg.ttsConfig) {
-        ttsClient.configure({
-          provider: msg.ttsConfig.provider,
-          token: msg.ttsConfig.token,
-          voiceId: msg.ttsConfig.voice_id,
-          wsUrl: msg.ttsConfig.ws_url,
-          modelId: msg.ttsConfig.model_id,
-        });
-      }
-      if (pendingTokenResolve) {
-        pendingTokenResolve();
-        pendingTokenResolve = null;
-      }
+    case 'speakData':
+      (async () => {
+        if (!msg.audioBase64 || !vrm || muted) return;
+        if (!audioCtx) audioCtx = new AudioContext();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        try {
+          await playBufferedTts({
+            audioBase64: msg.audioBase64,
+            phonemes: msg.phonemes,
+            vrm,
+            avatar,
+            audioCtx,
+            playAnimation: (name) => avatar.playAnimation(name),
+            onDone: () => vscode.postMessage({ type: 'speechDone' }),
+          });
+        } catch (err) {
+          console.error('[Primeta TTS] playback failed:', err);
+        }
+      })();
       break;
     case 'setEmotion':
       avatar.setEmotion(msg.name, msg.intensity || 1.0);
@@ -359,34 +475,51 @@ window.addEventListener('message', (event) => {
   }
 });
 
-// Sound toggle — starts muted, click to enable/disable
-document.getElementById('sound-btn')?.addEventListener('click', () => {
-  ttsClient.muted = !ttsClient.muted;
+// Click-target shown when a TTS-configured config arrives. Establishes
+// the user activation Chrome's autoplay policy requires before
+// AudioContext.resume() will unsuspend. One click unlocks audio for the
+// whole session.
+function unlockAudio() {
+  if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  audioUnlocked = true;
+  muted = false;
+  hideAudioUnlock();
+  syncSoundButtonUI();
+}
 
-  if (!ttsClient.muted && !audioCtx) {
-    audioCtx = new AudioContext();
-    ttsClient._audioCtx = audioCtx;
-  }
+function showAudioUnlock() {
+  document.getElementById('audio-unlock')?.classList.remove('hidden');
+}
 
-  const unmuted = !ttsClient.muted;
+function hideAudioUnlock() {
+  document.getElementById('audio-unlock')?.classList.add('hidden');
+}
 
-  // Update UI
+function syncSoundButtonUI() {
+  const unmuted = !muted;
   const btn = document.getElementById('sound-btn');
   const iconOff = document.getElementById('sound-icon-off');
   const iconOn = document.getElementById('sound-icon-on');
-  const label = document.getElementById('sound-label');
+  btn?.classList.toggle('active', unmuted);
+  if (iconOff) iconOff.style.display = unmuted ? 'none' : '';
+  if (iconOn) iconOn.style.display = unmuted ? '' : 'none';
+}
 
-  if (unmuted) {
-    btn?.classList.add('active');
-    if (iconOff) iconOff.style.display = 'none';
-    if (iconOn) iconOn.style.display = '';
-    if (label) label.textContent = 'Sound on';
+document.getElementById('audio-unlock')?.addEventListener('click', () => {
+  unlockAudio();
+});
+
+// Sound toggle. If the user clicks this before clicking the unlock
+// overlay, treat it as the unlock gesture (it satisfies the same Chrome
+// activation requirement).
+document.getElementById('sound-btn')?.addEventListener('click', () => {
+  if (muted) {
+    unlockAudio();
   } else {
-    btn?.classList.remove('active');
-    if (iconOff) iconOff.style.display = '';
-    if (iconOn) iconOn.style.display = 'none';
-    if (label) label.textContent = 'Sound off';
-    ttsClient.cancel();
+    muted = true;
+    cancelTts();
+    syncSoundButtonUI();
   }
 });
 

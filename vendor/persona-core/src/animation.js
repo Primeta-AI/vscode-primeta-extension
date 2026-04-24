@@ -66,7 +66,15 @@ export class AnimationManager {
     if (!this.actions[name]) {
       const match = Object.keys(this.actions).find(k => k.toLowerCase() === name.toLowerCase())
       if (match) { name = match } else {
-        if (name !== '__idle' && this.actions['__idle']) {
+        if (name === '__idle') {
+          // Persona explicitly opted out of an idle animation. Fade whatever
+          // is currently playing down to zero so bones relax and the
+          // avatar-controller's procedural fallback can take over.
+          if (this.currentAction) this.currentAction.fadeOut(CROSSFADE_DURATION)
+          this.currentAction = null
+          this.currentAnimName = ''
+          this.currentPriority = ANIM_PRIORITY.BASE
+        } else if (this.actions['__idle']) {
           this.play('__idle', null, priority)
         }
         return
@@ -131,6 +139,18 @@ export class AnimationManager {
 
   get hasAnimations() {
     return Object.keys(this.actions).length > 0
+  }
+
+  // True when at least one registered action is currently running with
+  // non-trivial weight. Used by the render loop to decide between
+  // "scripted animation is driving the skeleton" (apply breathing overlay
+  // on top) and "nothing is driving it" (run full procedural so the
+  // character doesn't freeze in bind pose).
+  hasActiveActions() {
+    for (const action of Object.values(this.actions)) {
+      if (action.isRunning() && action.getEffectiveWeight() > 0.01) return true
+    }
+    return false
   }
 
   reset() {

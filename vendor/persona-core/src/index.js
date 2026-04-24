@@ -6,7 +6,8 @@ export {
 
 export { buildExpressionNameMap, FacialExpressionState } from './facial.js'
 export { retargetClip, normalizeBoneName } from './retarget.js'
-export { setupProceduralFallback, proceduralAnimate } from './procedural.js'
+export { setupProceduralFallback, proceduralAnimate, applyBreathingOverlay } from './procedural.js'
+export { extendPartialSpringChains, fixupLookAtApplier } from './spring-bones.js'
 export { speakWithLipSync } from './lip-sync.js'
 export { TtsClient } from './tts-client.js'
 export { AnimationManager, ANIM_PRIORITY } from './animation.js'

@@ -117,61 +117,6 @@ export async function downloadFile(fileUrl: string, maxRedirects = 5): Promise<B
   });
 }
 
-export interface TtsTokenData {
-  provider: string;
-  token: string;
-  voice_id: string;
-  ws_url: string;
-  model_id?: string;
-}
-
-export async function fetchTtsToken(voiceId?: string): Promise<TtsTokenData> {
-  const body: Record<string, string> = {};
-  if (voiceId) body.voice_id = voiceId;
-
-  const res = await apiRequest('POST', '/api/tts_token', JSON.stringify(body));
-
-  if (res.statusCode === 401) {
-    throw new Error('Invalid API token.');
-  }
-  if (res.statusCode !== 200) {
-    const errBody = res.body.toString().slice(0, 200);
-    throw new Error(`TTS token error: ${res.statusCode} ${errBody}`);
-  }
-
-  return JSON.parse(res.body.toString());
-}
-
-export async function switchPersona(personaId: number): Promise<PrimetaConfig> {
-  const res = await apiRequest('PATCH', '/api/config', JSON.stringify({
-    persona_id: personaId,
-  }));
-
-  if (res.statusCode !== 200) {
-    throw new Error(`Failed to switch persona: ${res.statusCode}`);
-  }
-
-  return JSON.parse(res.body.toString());
-}
-
-export async function sendMessage(text: string, bridgeName?: string): Promise<void> {
-  const res = await apiRequest('POST', '/api/messages', JSON.stringify({
-    text,
-    bridge_name: bridgeName,
-  }));
-
-  if (res.statusCode === 401) {
-    throw new Error('Invalid API token.');
-  }
-  if (res.statusCode === 422) {
-    const data = JSON.parse(res.body.toString());
-    throw new Error(data.error || 'No bridge connected');
-  }
-  if (res.statusCode !== 202) {
-    throw new Error(`Send failed: ${res.statusCode}`);
-  }
-}
-
 export async function synthesize(text: string, voiceId?: string): Promise<TtsResult> {
   const settings = getSettings();
   if (!settings.apiToken) {

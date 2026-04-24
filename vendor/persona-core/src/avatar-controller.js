@@ -5,7 +5,7 @@
 
 import { FacialExpressionState, buildExpressionNameMap } from './facial.js'
 import { AnimationManager } from './animation.js'
-import { setupProceduralFallback, proceduralAnimate } from './procedural.js'
+import { setupProceduralFallback, proceduralAnimate, applyBreathingOverlay } from './procedural.js'
 
 export class AvatarController {
   constructor(THREE) {
@@ -148,6 +148,17 @@ export class AvatarController {
 
     if (this.anims.hasAnimations && this.anims.mixer) {
       this.anims.mixer.update(delta)
+
+      // If the current persona opted out of its idle animation (or we're
+      // mid-fadeout and no action currently has weight), fall through to
+      // full procedural so the character keeps breathing/swaying instead
+      // of freezing in bind pose. Otherwise just layer breathing on top
+      // of the scripted animation.
+      if (this.anims.hasActiveActions()) {
+        applyBreathingOverlay(this.clock?.elapsedTime || 0, this.bones)
+      } else {
+        proceduralAnimate(this.clock?.elapsedTime || 0, this.bones, this.baseRot)
+      }
 
       // Expose hips world position for camera follow
       const hips = this.vrm.humanoid?.getRawBoneNode('hips')

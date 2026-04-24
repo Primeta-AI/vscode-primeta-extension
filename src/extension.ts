@@ -16,9 +16,43 @@ function getWorkspaceName(): string | null {
   return folders[0].name;
 }
 
+function updateHasApiTokenContext() {
+  const token = vscode.workspace.getConfiguration('primeta').get<string>('apiToken', '');
+  vscode.commands.executeCommand('setContext', 'primeta.hasApiToken', !!token);
+}
+
 export function activate(context: vscode.ExtensionContext) {
+  // Drive the sidebar's two viewsWelcome states ("enter a token" vs
+  // "open the avatar") based on whether an API token is configured.
+  updateHasApiTokenContext();
   context.subscriptions.push(
-    vscode.commands.registerCommand('primeta.showAvatar', () => {
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('primeta.apiToken')) updateHasApiTokenContext();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('primeta.setApiToken', async () => {
+      const current = vscode.workspace.getConfiguration('primeta').get<string>('apiToken', '');
+      const value = await vscode.window.showInputBox({
+        title: 'Primeta API Token',
+        prompt: 'Paste the token from your primeta.ai settings page',
+        placeHolder: 'Your API token',
+        password: true,
+        value: current,
+        ignoreFocusOut: true,
+      });
+      if (value === undefined) return; // cancelled
+      await vscode.workspace.getConfiguration('primeta').update(
+        'apiToken',
+        value.trim(),
+        vscode.ConfigurationTarget.Global,
+      );
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('primeta.showPersona', () => {
       if (panel) {
         panel.reveal();
         return;
@@ -58,7 +92,7 @@ export function activate(context: vscode.ExtensionContext) {
       });
     }),
 
-    vscode.commands.registerCommand('primeta.hideAvatar', () => {
+    vscode.commands.registerCommand('primeta.hidePersona', () => {
       panel?.dispose();
     })
   );

@@ -6,22 +6,27 @@ export function setupProceduralFallback(vrm) {
   const humanoid = vrm?.humanoid
   if (!humanoid) return { bones: {}, baseRot: {} }
 
-  const getRawBone = (name) => {
+  // Prefer normalized bones. FBX retargeting writes to normalized, and
+  // humanoid.update() (called inside vrm.update) propagates normalized →
+  // raw each frame. Writing breathing/procedural to raw gets stomped
+  // during that propagation; writing to normalized survives.
+  const getBone = (name) => {
+    if (humanoid.getNormalizedBoneNode) return humanoid.getNormalizedBoneNode(name)
     if (humanoid.getRawBoneNode) return humanoid.getRawBoneNode(name)
     if (humanoid.getBoneNode) return humanoid.getBoneNode(name)
     return null
   }
 
   const bones = {
-    hips: getRawBone('hips'),
-    spine: getRawBone('spine'),
-    chest: getRawBone('chest'),
-    neck: getRawBone('neck'),
-    head: getRawBone('head'),
-    leftUpperArm: getRawBone('leftUpperArm'),
-    rightUpperArm: getRawBone('rightUpperArm'),
-    leftLowerArm: getRawBone('leftLowerArm'),
-    rightLowerArm: getRawBone('rightLowerArm'),
+    hips: getBone('hips'),
+    spine: getBone('spine'),
+    chest: getBone('chest'),
+    neck: getBone('neck'),
+    head: getBone('head'),
+    leftUpperArm: getBone('leftUpperArm'),
+    rightUpperArm: getBone('rightUpperArm'),
+    leftLowerArm: getBone('leftLowerArm'),
+    rightLowerArm: getBone('rightLowerArm'),
   }
 
   if (bones.leftUpperArm) bones.leftUpperArm.rotation.z = 1.1
@@ -36,6 +41,21 @@ export function setupProceduralFallback(vrm) {
   }
 
   return { bones, baseRot }
+}
+
+/**
+ * Additive breathing overlay — run every frame AFTER the animation mixer
+ * updates so scripted FBX loops get a gentle chest-rise layered on top.
+ * Keeps the character from looking locked-to-a-loop during idle / talking.
+ *
+ * Don't include sway or nod here — those fight scripted animations by
+ * moving the hips/head. Breathing only touches spine/chest and is small
+ * enough (0.015 rad peak) to blend invisibly.
+ */
+export function applyBreathingOverlay(t, bones) {
+  const breathe = Math.sin(t * 1.2) * 0.015
+  if (bones.spine) bones.spine.rotation.x += breathe * 0.6
+  if (bones.chest) bones.chest.rotation.x += breathe * 0.4
 }
 
 /**

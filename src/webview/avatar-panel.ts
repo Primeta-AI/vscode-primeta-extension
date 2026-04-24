@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { fetchConfig, fetchTtsToken, downloadFile, PrimetaConfig } from '../tts/tts-client';
+import * as crypto from 'crypto';
+import { fetchConfig, downloadFile, synthesize, PrimetaConfig } from '../tts/tts-client';
 import { ActionCableClient } from '../cable/actioncable-client';
 
 export class AvatarPanel {
@@ -14,7 +15,7 @@ export class AvatarPanel {
   constructor(private context: vscode.ExtensionContext) {
     this.panel = vscode.window.createWebviewPanel(
       'primetaAvatar',
-      'Primeta Avatar',
+      'Primeta',
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       {
         enableScripts: true,
@@ -36,8 +37,6 @@ export class AvatarPanel {
       if (msg.type === 'ready') {
         // Webview is ready — show waiting state until extension.ts calls loadBridge
         this.panel.webview.postMessage({ type: 'showWaiting' });
-      } else if (msg.type === 'requestTtsToken') {
-        this.handleTtsTokenRequest();
       } else if (msg.type === 'switchBridge') {
         this.onSwitchBridgeCallbacks.forEach(cb => cb(msg.bridgeName));
       }
@@ -101,6 +100,7 @@ export class AvatarPanel {
         animationData,
         voiceId: persona.voice_id,
         bridgeName,
+        ttsConfigured: this.config.user.tts_configured,
       });
     } catch (err: any) {
       vscode.window.showErrorMessage(`Primeta: ${err.message}`);
@@ -147,6 +147,7 @@ export class AvatarPanel {
         animationData,
         voiceId: persona.voice_id,
         bridgeName: this.currentBridgeName,
+        ttsConfigured: this.config.user.tts_configured,
       });
     } catch (err: any) {
       vscode.window.showErrorMessage(`Primeta: ${err.message}`);
@@ -181,37 +182,23 @@ export class AvatarPanel {
   }
 
   /**
-   * Send text to the webview for client-side TTS.
-   * Fetches a session token from the server if needed, then lets
-   * the webview handle the TTS WebSocket connection directly.
+   * Synthesize via /api/tts using the Bearer token the extension host
+   * holds, then hand the audio + phoneme timeline to the webview for
+   * playback. Synth happens here (not in the webview) because the API
+   * uses Bearer auth and the webview sandbox has no token access.
    */
   async sendTtsText(text: string) {
     if (!this.config?.user.tts_configured) return;
-
-    this.panel.webview.postMessage({
-      type: 'speak',
-      text,
-    });
-  }
-
-  /**
-   * Called when the webview requests a TTS token (via onTokenExpired in TtsClient).
-   * Fetches from the server and sends back to the webview.
-   */
-  private async handleTtsTokenRequest() {
     try {
-      const voiceId = this.config?.persona?.voice_id || undefined;
-      const tokenData = await fetchTtsToken(voiceId);
+      const voiceId = this.config.persona?.voice_id || undefined;
+      const { audioBase64, phonemes } = await synthesize(text, voiceId);
       this.panel.webview.postMessage({
-        type: 'ttsToken',
-        ttsConfig: tokenData,
+        type: 'speakData',
+        audioBase64,
+        phonemes,
       });
     } catch (err: any) {
-      console.error('[Primeta TTS] Token fetch failed:', err.message);
-      this.panel.webview.postMessage({
-        type: 'ttsToken',
-        ttsConfig: null,
-      });
+      console.error('[Primeta TTS] synth failed:', err.message);
     }
   }
 
@@ -232,10 +219,6 @@ export class AvatarPanel {
       vscode.Uri.file(path.join(this.context.extensionPath, 'dist', 'webview.js'))
     );
 
-    const iconUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.file(path.join(this.context.extensionPath, 'assets', 'icon.png'))
-    );
-
     const nonce = getNonce();
 
     return `<!DOCTYPE html>
@@ -243,9 +226,16 @@ export class AvatarPanel {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${this.panel.webview.cspSource} https: blob:; script-src 'nonce-${nonce}' ${this.panel.webview.cspSource}; style-src 'unsafe-inline'; media-src blob:; connect-src https: http: ws: wss: blob:;">
-  <title>Primeta Avatar</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${this.panel.webview.cspSource} https: blob:; script-src 'nonce-${nonce}' ${this.panel.webview.cspSource}; style-src 'unsafe-inline'; media-src blob: data:; connect-src https: http: ws: wss: blob:;">
+  <title>Primeta</title>
   <style>
+    /* Primeta brand palette — mirrors @theme tokens in the Rails app
+       (app/assets/tailwind/application.css). Keep in sync. */
+    :root {
+      --primeta-accent: #0d7d6e;
+      --primeta-accent-rgb: 13, 125, 110;
+      --primeta-accent-dk: #0a635a;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       height: 100vh;
@@ -291,7 +281,7 @@ export class AvatarPanel {
     #waiting-icon {
       width: 64px;
       height: 64px;
-      border-radius: 50%;
+      color: var(--primeta-accent);
       animation: glow-pulse 2s ease-in-out infinite;
     }
     #waiting-text {
@@ -307,11 +297,11 @@ export class AvatarPanel {
     }
     @keyframes glow-pulse {
       0%, 100% {
-        filter: drop-shadow(0 0 6px rgba(232, 93, 38, 0.3));
+        filter: drop-shadow(0 0 6px rgba(var(--primeta-accent-rgb), 0.3));
         opacity: 0.7;
       }
       50% {
-        filter: drop-shadow(0 0 20px rgba(232, 93, 38, 0.8));
+        filter: drop-shadow(0 0 20px rgba(var(--primeta-accent-rgb), 0.8));
         opacity: 1;
       }
     }
@@ -330,6 +320,16 @@ export class AvatarPanel {
       background: rgba(0,0,0,0.4);
       backdrop-filter: blur(8px);
       border-top: 1px solid rgba(255,255,255,0.08);
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    /* Reveal on hover or while any child has focus (keyboard access, open
+       bridge dropdown). focus-within keeps the bar up while interacting. */
+    #avatar-area:hover #toolbar,
+    #toolbar:focus-within {
+      opacity: 1;
+      transform: translateY(0);
     }
     #bridge-select {
       font-size: 11px;
@@ -342,64 +342,129 @@ export class AvatarPanel {
       cursor: pointer;
       max-width: 160px;
     }
-    #bridge-select:focus { outline: 1px solid rgba(232, 93, 38, 0.5); }
+    #bridge-select:focus { outline: 1px solid rgba(var(--primeta-accent-rgb), 0.5); }
 
-    /* Sound toggle */
-    #sound-toggle {
-    }
+    /* Sound toggle — compact square icon button, matches bridge-select height. */
     #sound-btn {
-      display: flex;
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 6px 12px;
-      border-radius: 999px;
+      justify-content: center;
+      padding: 0;
+      border-radius: 4px;
       border: 1px solid rgba(255,255,255,0.15);
-      background: rgba(0,0,0,0.5);
-      backdrop-filter: blur(8px);
-      color: rgba(255,255,255,0.5);
-      font-size: 11px;
-      font-family: var(--vscode-font-family, monospace);
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.6);
       cursor: pointer;
-      transition: all 0.2s;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
     #sound-btn:hover {
-      background: rgba(232, 93, 38, 0.2);
-      border-color: rgba(232, 93, 38, 0.4);
-      color: rgba(255,255,255,0.8);
+      background: rgba(var(--primeta-accent-rgb), 0.18);
+      border-color: rgba(var(--primeta-accent-rgb), 0.4);
+      color: rgba(255,255,255,0.9);
     }
     #sound-btn.active {
-      border-color: rgba(232, 93, 38, 0.5);
-      color: rgba(232, 93, 38, 0.9);
+      border-color: rgba(var(--primeta-accent-rgb), 0.5);
+      color: var(--primeta-accent);
+      background: rgba(var(--primeta-accent-rgb), 0.12);
     }
-    #sound-btn svg { width: 14px; height: 14px; }
+    #sound-btn svg { width: 14px; height: 14px; display: block; }
+
+    /* Audio unlock overlay — full-screen click target shown when a
+       TTS-configured bridge connects, until the user satisfies Chrome's
+       autoplay-policy gesture requirement. A small toolbar button gets
+       missed, so we overlay the whole panel. Dismissed on first click. */
+    #audio-unlock {
+      position: absolute;
+      inset: 0;
+      z-index: 40;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      background: rgba(0,0,0,0.72);
+      backdrop-filter: blur(10px);
+      cursor: pointer;
+      color: rgba(255,255,255,0.92);
+      font-family: var(--vscode-font-family, monospace);
+      text-align: center;
+      padding: 24px;
+      transition: opacity 0.25s ease;
+    }
+    #audio-unlock.hidden { opacity: 0; pointer-events: none; }
+    #audio-unlock-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      border: 2px solid rgba(var(--primeta-accent-rgb), 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: unlock-pulse 1.8s ease-in-out infinite;
+    }
+    #audio-unlock-icon svg { width: 36px; height: 36px; color: rgba(var(--primeta-accent-rgb), 0.95); }
+    #audio-unlock-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    #audio-unlock-sub {
+      font-size: 12px;
+      opacity: 0.6;
+      max-width: 240px;
+      line-height: 1.45;
+    }
+    @keyframes unlock-pulse {
+      0%, 100% {
+        box-shadow: 0 0 0 0 rgba(var(--primeta-accent-rgb), 0.45);
+      }
+      50% {
+        box-shadow: 0 0 0 14px rgba(var(--primeta-accent-rgb), 0);
+      }
+    }
   </style>
 </head>
 <body>
   <div id="avatar-area">
     <canvas id="avatar-canvas"></canvas>
     <div id="status"></div>
+    <div id="audio-unlock" class="hidden">
+      <div id="audio-unlock-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+          <path d="M10 3.75a.75.75 0 00-1.264-.546L4.703 7H3.167a.75.75 0 00-.7.48A6.985 6.985 0 002 10c0 .887.165 1.737.468 2.52.111.29.39.48.699.48h1.536l4.033 3.796A.75.75 0 0010 16.25V3.75z" />
+          <path d="M15.95 5.05a.75.75 0 00-1.06 1.06 5.5 5.5 0 010 7.78.75.75 0 001.06 1.06 7 7 0 000-9.9z" />
+          <path d="M13.829 7.172a.75.75 0 00-1.06 1.06 2.5 2.5 0 010 3.536.75.75 0 001.06 1.06 4 4 0 000-5.656z" />
+        </svg>
+      </div>
+      <div id="audio-unlock-title">Click to enable voice</div>
+      <div id="audio-unlock-sub">Your browser requires a click before it will play audio.</div>
+    </div>
     <div id="waiting-state">
-      <img id="waiting-icon" src="${iconUri}" alt="Primeta" />
-      <div id="waiting-text">Waiting for bridge...</div>
+      <svg id="waiting-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="square">
+        <path d="M16 14 L12 14 L12 50 L16 50" />
+        <path d="M48 14 L52 14 L52 50 L48 50" />
+        <circle cx="32" cy="32" r="6" fill="currentColor" stroke="none" />
+      </svg>
+      <div id="waiting-text">Waiting for connection...</div>
       <div id="waiting-workspace"></div>
     </div>
     <div id="toolbar">
       <select id="bridge-select" title="Switch session">
         <option value="">No bridges</option>
       </select>
-      <div id="sound-toggle">
-        <button id="sound-btn" title="Toggle sound">
+      <button id="sound-btn" title="Toggle sound">
           <svg id="sound-icon-off" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
             <path d="M10 3.75a.75.75 0 00-1.264-.546L4.703 7H3.167a.75.75 0 00-.7.48A6.985 6.985 0 002 10c0 .887.165 1.737.468 2.52.111.29.39.48.699.48h1.536l4.033 3.796A.75.75 0 0010 16.25V3.75z" />
-            <path fill-rule="evenodd" d="M14.28 5.22a.75.75 0 011.06 0l.72.72.72-.72a.75.75 0 111.06 1.06l-.72.72.72.72a.75.75 0 11-1.06 1.06l-.72-.72-.72.72a.75.75 0 01-1.06-1.06l.72-.72-.72-.72a.75.75 0 010-1.06z" clip-rule="evenodd" />
+            <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M13.5 7 L18 13 M18 7 L13.5 13" />
           </svg>
           <svg id="sound-icon-on" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" style="display:none;">
             <path d="M10 3.75a.75.75 0 00-1.264-.546L4.703 7H3.167a.75.75 0 00-.7.48A6.985 6.985 0 002 10c0 .887.165 1.737.468 2.52.111.29.39.48.699.48h1.536l4.033 3.796A.75.75 0 0010 16.25V3.75z" />
             <path d="M15.95 5.05a.75.75 0 00-1.06 1.06 5.5 5.5 0 010 7.78.75.75 0 001.06 1.06 7 7 0 000-9.9z" />
             <path d="M13.829 7.172a.75.75 0 00-1.06 1.06 2.5 2.5 0 010 3.536.75.75 0 001.06 1.06 4 4 0 000-5.656z" />
           </svg>
-        </button>
-      </div>
+      </button>
     </div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
@@ -408,11 +473,8 @@ export class AvatarPanel {
   }
 }
 
+// CSP nonces must be unguessable; Math.random() isn't. Using
+// crypto.randomBytes — base64 is allowed in nonce values per RFC 7636.
 function getNonce(): string {
-  let text = '';
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i++) {
-    text += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return text;
+  return crypto.randomBytes(16).toString('base64');
 }

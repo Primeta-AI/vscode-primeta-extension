@@ -1,9 +1,9 @@
 {
-  "name": "primeta-avatar",
-  "displayName": "Primeta Avatar",
+  "name": "primeta",
+  "displayName": "Primeta",
   "description": "3D VRM avatar overlay with TTS lip-sync for Claude Code",
-  "version": "0.1.0",
-  "publisher": "primeta",
+  "version": "0.2.0",
+  "publisher": "PrimetaAI",
   "license": "MIT",
   "icon": "assets/icon.png",
   "repository": {
@@ -32,16 +32,51 @@
   "contributes": {
     "commands": [
       {
-        "command": "primeta.showAvatar",
-        "title": "Primeta: Show Avatar"
+        "command": "primeta.showPersona",
+        "title": "Primeta: Show Persona"
       },
       {
-        "command": "primeta.hideAvatar",
-        "title": "Primeta: Hide Avatar"
+        "command": "primeta.hidePersona",
+        "title": "Primeta: Hide Persona"
+      },
+      {
+        "command": "primeta.setApiToken",
+        "title": "Primeta: Set API Token"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "primeta",
+          "title": "Primeta",
+          "icon": "assets/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "primeta": [
+        {
+          "id": "primeta.home",
+          "name": "Primeta",
+          "contextualTitle": "Primeta",
+          "icon": "assets/sidebar-icon.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "primeta.home",
+        "when": "!primeta.hasApiToken",
+        "contents": "A 3D avatar companion for Claude Code — watch your assistant speak and emote as you work.\n\nTo get started, copy your API token from the [primeta.ai settings page](https://primeta.ai/settings) and paste it here.\n\n[Set API Token](command:primeta.setApiToken)"
+      },
+      {
+        "view": "primeta.home",
+        "when": "primeta.hasApiToken",
+        "contents": "Open your persona to see your AI assistant come to life.\n\n[Show Persona](command:primeta.showPersona)\n[Hide Persona](command:primeta.hidePersona)\n\nPrimeta auto-connects to a Claude Code bridge matching your workspace folder name. If none is running, [set up the MCP bridge](https://primeta.ai/docs/mcp).\n\n[Change API Token](command:primeta.setApiToken)\n\nNeed a new token? Get one from your [primeta.ai settings page](https://primeta.ai/settings)."
       }
     ],
     "configuration": {
-      "title": "Primeta Avatar",
+      "title": "Primeta",
       "properties": {
         "primeta.serverUrl": {
           "type": "string",
@@ -51,7 +86,7 @@
         "primeta.apiToken": {
           "type": "string",
           "default": "",
-          "description": "Bridge API token (from Primeta Settings page)"
+          "description": "API token (from Primeta Settings page)"
         }
       }
     }
