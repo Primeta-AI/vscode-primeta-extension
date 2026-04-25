@@ -11,7 +11,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
-import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
+import { VRMAnimationLoaderPlugin, VRMLookAtQuaternionProxy, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
 
 import {
   AvatarController,
@@ -272,6 +272,15 @@ function loadModelFromBase64(modelBase64, animationData) {
     }
 
     VRMUtils.rotateVRM0(vrm);
+
+    // Pre-create the look-at proxy once so concurrent VRMA loads don't each
+    // create their own (the auto-create path in createVRMAnimationClip races
+    // and ends up adding multiple proxies to vrm.scene).
+    if (vrm.lookAt && !vrm.scene.children.find(o => o instanceof VRMLookAtQuaternionProxy)) {
+      const proxy = new VRMLookAtQuaternionProxy(vrm.lookAt);
+      proxy.name = 'VRMLookAtQuaternionProxy';
+      vrm.scene.add(proxy);
+    }
 
     // Register embedded animations from the GLTF
     for (const clip of gltf.animations) {

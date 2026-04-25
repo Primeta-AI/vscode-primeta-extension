@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.3] - 2026-04-25
+
+### Fixed
+
+- VRMA animations no longer stack duplicate `VRMLookAtQuaternionProxy` instances on the VRM scene. `createVRMAnimationClip` auto-attaches a proxy when one is missing, so each VRMA clip in a multi-animation persona was adding its own. The webview now pre-creates a single proxy on the VRM right after load, guarded against re-adding on model swap
+
 ## [0.2.2] - 2026-04-24
 
 ### Fixed

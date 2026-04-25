@@ -2,8 +2,8 @@
   "name": "primeta",
   "displayName": "Primeta",
   "description": "Companion panel for Primeta's MCP server — your MCP client's responses rendered as a speaking, emoting 3D avatar in VS Code.",
-  "version": "0.2.2",
-  "publisher": "PrimetaAI",
+  "version": "0.2.3",
+  "publisher": "primetaai",
   "license": "MIT",
   "icon": "assets/icon.png",
   "repository": {
