@@ -11,6 +11,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
 
 import {
   AvatarController,
@@ -280,7 +281,7 @@ function loadModelFromBase64(modelBase64, animationData) {
     // Load server-provided FBX animations (base64-encoded)
     if (animationData && Object.keys(animationData).length > 0) {
       setStatus('Loading animations...');
-      await loadFBXAnimationsFromBase64(animationData);
+      await loadAnimationsFromBase64(animationData);
     }
 
     if (avatar.anims.hasAnimations) {
@@ -298,32 +299,37 @@ function loadModelFromBase64(modelBase64, animationData) {
   });
 }
 
-// --- FBX Animation Loading (base64, VS Code specific) ---
+// --- Animation loading (base64, VS Code specific) ---
+//
+// The extension pre-fetches animation files in Node and forwards them as
+// base64. We sniff the decoded buffer's magic bytes to pick the right
+// loader: glTF binary (used by .vrma) vs FBX. This mirrors the URL-based
+// detection in primeta-rails' avatar_controller.js — see
+// `app/javascript/controllers/avatar_controller.js`.
 
-async function loadFBXAnimationsFromBase64(animationData) {
+const GLTF_MAGIC = 0x46546C67; // 'glTF' (little-endian DWORD)
+
+function isGltfBuffer(buffer) {
+  if (!buffer || buffer.byteLength < 4) return false;
+  return new DataView(buffer).getUint32(0, true) === GLTF_MAGIC;
+}
+
+async function loadAnimationsFromBase64(animationData) {
   if (!animationData || Object.keys(animationData).length === 0) return;
   if (!vrm || !avatar.anims.mixer) return;
-
-  const fbxLoader = new FBXLoader();
 
   for (const [name, base64] of Object.entries(animationData)) {
     try {
       const buffer = base64ToArrayBuffer(base64);
-      const fbx = fbxLoader.parse(buffer, '');
-      if (fbx.animations.length > 0) {
-        const clip = retargetClip(THREE, fbx.animations[0], fbx, vrm);
-        if (clip) {
-          clip.name = name;
-          avatar.anims.registerAction(name, clip);
-        } else {
-          console.warn('[persona] retargetClip returned null for', name);
-        }
-      } else {
-        console.warn('[persona] FBX for', name, 'contained no animations');
+      const clip = isGltfBuffer(buffer)
+        ? await parseVRMAClip(buffer, name)
+        : parseFBXClip(buffer, name);
+
+      if (clip) {
+        avatar.anims.registerAction(name, clip);
       }
     } catch (err) {
-      // Was previously swallowed, which hid broken URLs / malformed clips.
-      console.error('[persona] FBX load failed for', name, err);
+      console.error('[persona] animation load failed for', name, err);
     }
   }
 
@@ -331,6 +337,44 @@ async function loadFBXAnimationsFromBase64(animationData) {
     // System-state key convention — see comment in loadModel().
     if (avatar.anims.actions.__idle) avatar.anims.play('__idle');
   }
+}
+
+function parseFBXClip(buffer, name) {
+  const fbx = new FBXLoader().parse(buffer, '');
+  if (fbx.animations.length === 0) {
+    console.warn('[persona] FBX for', name, 'contained no animations');
+    return null;
+  }
+  const clip = retargetClip(THREE, fbx.animations[0], fbx, vrm);
+  if (!clip) {
+    console.warn('[persona] retargetClip returned null for', name);
+    return null;
+  }
+  clip.name = name;
+  return clip;
+}
+
+function parseVRMAClip(buffer, name) {
+  const loader = new GLTFLoader();
+  loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+  return new Promise((resolve, reject) => {
+    loader.parse(
+      buffer,
+      '',
+      (gltf) => {
+        const vrmAnims = gltf.userData.vrmAnimations;
+        if (!vrmAnims || vrmAnims.length === 0) {
+          console.warn('[persona] VRMA for', name, 'contained no animations');
+          resolve(null);
+          return;
+        }
+        const clip = createVRMAnimationClip(vrmAnims[0], vrm);
+        clip.name = name;
+        resolve(clip);
+      },
+      (err) => reject(err)
+    );
+  });
 }
 
 // --- Camera fit-to-model ---

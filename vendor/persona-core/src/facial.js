@@ -65,6 +65,11 @@ export class FacialExpressionState {
     this.saccadeTargetYaw = 0
     this.saccadeTargetPitch = 0
     this.nextSaccadeTime = 1 + Math.random() * 2
+    // When true, lip-sync's viseme animation owns the mouth; emotion-driven
+    // mouth blendshapes are suppressed to avoid double-driving. Initialized
+    // here so the property is part of the explicit API surface — callers
+    // (and drift-detection in vendoring consumers) can rely on `'suppressMouthOverride' in this`.
+    this.suppressMouthOverride = false
   }
 
   reset() {
