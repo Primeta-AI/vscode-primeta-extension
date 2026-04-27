@@ -220,7 +220,7 @@ function base64ToArrayBuffer(base64) {
   return buffer;
 }
 
-function loadModelFromBase64(modelBase64, animationData) {
+function loadModelFromBase64(modelBase64, animationData, animationMetadata) {
   const loader = new GLTFLoader();
   loader.register((parser) => new VRMLoaderPlugin(parser, { autoUpdateHumanBones: true }));
 
@@ -290,7 +290,7 @@ function loadModelFromBase64(modelBase64, animationData) {
     // Load server-provided FBX animations (base64-encoded)
     if (animationData && Object.keys(animationData).length > 0) {
       setStatus('Loading animations...');
-      await loadAnimationsFromBase64(animationData);
+      await loadAnimationsFromBase64(animationData, animationMetadata);
     }
 
     if (avatar.anims.hasAnimations) {
@@ -323,7 +323,7 @@ function isGltfBuffer(buffer) {
   return new DataView(buffer).getUint32(0, true) === GLTF_MAGIC;
 }
 
-async function loadAnimationsFromBase64(animationData) {
+async function loadAnimationsFromBase64(animationData, animationMetadata) {
   if (!animationData || Object.keys(animationData).length === 0) return;
   if (!vrm || !avatar.anims.mixer) return;
 
@@ -335,7 +335,8 @@ async function loadAnimationsFromBase64(animationData) {
         : parseFBXClip(buffer, name);
 
       if (clip) {
-        avatar.anims.registerAction(name, clip);
+        const loopMode = animationMetadata?.[name]?.loop_mode || 'loop';
+        avatar.anims.registerAction(name, clip, loopMode);
       }
     } catch (err) {
       console.error('[persona] animation load failed for', name, err);
@@ -472,7 +473,7 @@ window.addEventListener('message', (event) => {
       ttsConfigured = !!msg.ttsConfigured;
       if (ttsConfigured && !audioUnlocked) showAudioUnlock();
       if (msg.modelBase64) {
-        loadModelFromBase64(msg.modelBase64, msg.animationData || {});
+        loadModelFromBase64(msg.modelBase64, msg.animationData || {}, msg.animationMetadata || {});
       }
       break;
     case 'status':
