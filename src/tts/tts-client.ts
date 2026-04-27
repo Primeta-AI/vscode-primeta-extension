@@ -21,6 +21,7 @@ export interface PrimetaConfig {
     model_url: string | null;
     voice_id: string | null;
     animation_urls: Record<string, string>;
+    animation_metadata?: Record<string, { loop_mode: string }>;
   } | null;
   personas?: Array<{ id: number; name: string; slug: string }>;
   bridges?: Array<{ name: string; type: string }>;
