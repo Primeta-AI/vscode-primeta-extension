@@ -10,3 +10,4 @@ tsconfig.json
 .gitignore
 **/.DS_Store
 *.vsix
+assets/screenshots/**

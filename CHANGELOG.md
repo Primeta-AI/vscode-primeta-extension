@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.4] - 2026-04-27
+
+### Fixed
+
+- Non-looping animation states (e.g. `thinking`, `writing`) looped forever and never returned to idle. The `/api/config` response now carries `animation_metadata` alongside `animation_urls`; the extension forwards it to the webview so `registerAction` receives the correct `loop_mode` per clip
+
+### Documentation
+
+- README now ships with screenshots — hero shot of the panel, sidebar pre/post API token, the click-to-enable-voice overlay, an emotion close-up, the web app's API key copy UI, and the project switcher. Image references are absolute `raw.githubusercontent.com` URLs so they render on the VS Code Marketplace listing as well as on GitHub
+- Added `assets/screenshots/**` to `.vscodeignore` so the bundled `.vsix` doesn't carry the PNGs (Marketplace pulls them from GitHub)
+
 ## [0.2.3] - 2026-04-25
 
 ### Fixed
