@@ -424,7 +424,7 @@ function hideStatus() {
 
 // --- Waiting state ---
 
-function showWaiting(workspaceName) {
+function showWaiting(workspaceName, availableBridges) {
   const el = document.getElementById('waiting-state');
   if (el) el.classList.remove('hidden');
 
@@ -433,9 +433,10 @@ function showWaiting(workspaceName) {
 
   const wsEl = document.getElementById('waiting-workspace');
   if (wsEl) {
-    wsEl.textContent = workspaceName
-      ? `Looking for bridge "${workspaceName}"`
-      : '';
+    const lines = [];
+    if (workspaceName) lines.push(`Looking for bridge "${workspaceName}"`);
+    if (availableBridges > 0) lines.push('or pick a session from the menu');
+    wsEl.textContent = lines.join(' — ');
   }
 
   hideStatus();
@@ -462,7 +463,7 @@ window.addEventListener('message', (event) => {
   const msg = event.data;
   switch (msg.type) {
     case 'showWaiting':
-      showWaiting(msg.workspaceName);
+      showWaiting(msg.workspaceName, msg.availableBridges);
       break;
     case 'hideWaiting':
       hideWaiting();
@@ -510,6 +511,16 @@ window.addEventListener('message', (event) => {
       if (select) {
         select.innerHTML = '';
         if (msg.bridges && msg.bridges.length > 0) {
+          // No claimed bridge: add a placeholder so picking the first session
+          // still fires 'change' (nothing is auto-claimed on our behalf).
+          if (!msg.selectedBridge || !msg.bridges.includes(msg.selectedBridge)) {
+            const ph = document.createElement('option');
+            ph.value = '';
+            ph.textContent = 'Select a session…';
+            ph.disabled = true;
+            ph.selected = true;
+            select.appendChild(ph);
+          }
           msg.bridges.forEach(name => {
             const opt = document.createElement('option');
             opt.value = name;

@@ -172,11 +172,20 @@ export class ActionCableClient {
     });
   }
 
-  private teardownSocket() {
+  /**
+   * Detach the current socket (so its late close/message events are ignored
+   * by the `this.ws !== ws` guards) and only then close it. `force` uses
+   * terminate() for a socket we believe is dead. Never schedules a reconnect
+   * itself — callers decide that, so there is exactly one reconnect path.
+   */
+  private teardownSocket(force = false) {
     this.stopHeartbeatWatchdog();
     const old = this.ws;
     this.ws = null;
-    if (old) {
+    if (!old) return;
+    if (force && old.terminate) {
+      try { old.terminate(); } catch {}
+    } else {
       try { old.close(); } catch {}
     }
   }
@@ -312,6 +321,7 @@ export class ActionCableClient {
 
   private scheduleReconnect(delayMs = RECONNECT_DELAY_MS) {
     if (this.disposed) return;
+    // At most one pending reconnect: a newer request replaces the older one.
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     // connect() mints a brand-new ticket — tickets are one-time use.
     this.reconnectTimer = setTimeout(() => {
@@ -326,12 +336,9 @@ export class ActionCableClient {
       const idle = Date.now() - this.lastInboundAt;
       if (idle <= HEARTBEAT_TIMEOUT_MS) return;
       console.error(`[Primeta cable] No frames for ${Math.round(idle / 1000)}s — connection is dead, forcing reconnect`);
-      this.stopHeartbeatWatchdog();
-      if (this.ws) {
-        try { this.ws.terminate?.(); } catch {}
-        try { this.ws.close(); } catch {}
-        this.ws = null;
-      }
+      // Detach before terminating: the socket's close handler then sees
+      // `this.ws !== ws` and does nothing, so this is the only reconnect.
+      this.teardownSocket(true);
       this.scheduleReconnect();
     }, HEARTBEAT_CHECK_INTERVAL_MS);
   }

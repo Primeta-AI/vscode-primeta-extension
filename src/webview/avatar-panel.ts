@@ -48,12 +48,13 @@ export class AvatarPanel {
   }
 
   /** Show the waiting/empty state in the webview */
-  showWaiting(workspaceName?: string | null) {
+  showWaiting(workspaceName?: string | null, availableBridges = 0) {
     this.currentBridgeName = null;
     this.cancelSpeech();
     this.panel.webview.postMessage({
       type: 'showWaiting',
       workspaceName: workspaceName || undefined,
+      availableBridges,
     });
   }
 
@@ -171,7 +172,9 @@ export class AvatarPanel {
     this.panel.webview.postMessage({
       type: 'updateBridges',
       bridges: bridges.map(b => b.name),
-      selectedBridge: selectedBridge || this.currentBridgeName,
+      // `null` explicitly means "nothing selected"; undefined falls back to
+      // whatever bridge the panel currently has loaded.
+      selectedBridge: selectedBridge === undefined ? this.currentBridgeName : selectedBridge,
     });
   }
 

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ActionCableClient } from './cable/actioncable-client';
 import { AvatarPanel } from './webview/avatar-panel';
 import { fetchConfig } from './tts/tts-client';
+import { selectAutoConnectBridge } from './bridge-selection';
 
 let panel: AvatarPanel | undefined;
 let cableClient: ActionCableClient | undefined;
@@ -107,8 +108,10 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
- * Check the server for open bridges and auto-connect if one matches
- * the current workspace folder name.
+ * Check the server for open bridges and auto-connect only if one matches
+ * the current workspace folder name. Otherwise stay in the waiting state and
+ * let the user pick a session from the dropdown — never claim an arbitrary
+ * bridge (it may belong to another project's session).
  */
 async function autoConnectBridge() {
   const workspaceName = getWorkspaceName();
@@ -117,24 +120,14 @@ async function autoConnectBridge() {
     const config = await fetchConfig();
     const bridges = config.bridges || [];
 
-    // Update the bridge selector dropdown
-    panel?.updateBridgeList(bridges);
-
-    if (bridges.length === 0) {
-      panel?.showWaiting(workspaceName);
-      return;
-    }
-
-    // Look for a bridge matching the workspace folder name
-    const match = workspaceName
-      ? bridges.find((b: any) => b.name === workspaceName)
-      : null;
-
+    const match = selectAutoConnectBridge(bridges, workspaceName);
     if (match) {
-      connectToBridge(match.name);
+      panel?.updateBridgeList(bridges, match);
+      connectToBridge(match);
     } else {
-      // Connect to the first available bridge
-      connectToBridge(bridges[0].name);
+      panel?.showWaiting(workspaceName, bridges.length);
+      // No selection: the dropdown shows a "select a session" placeholder.
+      panel?.updateBridgeList(bridges, null);
     }
   } catch (err: any) {
     vscode.window.showErrorMessage(`Primeta: ${err.message}`);
@@ -173,9 +166,8 @@ async function handleBridgeStatus(event: string, bridgeName: string) {
   if (event === 'connected') {
     // If we're waiting and this bridge matches our workspace, auto-connect
     if (!cableClient?.currentBridge) {
-      if (bridgeName === workspaceName) {
-        connectToBridge(bridgeName);
-      }
+      const match = selectAutoConnectBridge([{ name: bridgeName }], workspaceName);
+      if (match) connectToBridge(match);
     }
   } else if (event === 'disconnected') {
     // If our claimed bridge disconnected, go back to waiting
