@@ -298,3 +298,100 @@ test('client: default mint path goes through fetch with Bearer header, not the U
     globalThis.fetch = realFetch;
   }
 });
+
+// ---------------------------------------------------------------- reconnect reliability (F-13)
+
+/** Count setTimeout calls with the reconnect delay while mock timers are on. */
+function countReconnectTimers(): { count: () => number; restore: () => void } {
+  const orig = globalThis.setTimeout;
+  let n = 0;
+  (globalThis as any).setTimeout = (fn: (...a: any[]) => void, ms?: number, ...rest: any[]) => {
+    if (ms === 3_000) n++;
+    return orig(fn, ms, ...rest);
+  };
+  return { count: () => n, restore: () => { globalThis.setTimeout = orig; } };
+}
+
+test('client: watchdog fire + synchronous close -> exactly one reconnect timer and one connect attempt', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
+  const timers = countReconnectTimers();
+  try {
+    const tickets = [TICKET_A, TICKET_B, 'tkt_CCCCCCCCCCCCCCCCCCCCCCCC'];
+    const mint = mock.fn(async () => tickets.shift()!);
+    const { client, sockets } = makeClient(mint);
+    await client.connect();
+    sockets[0].readyState = 1;
+    sockets[0].emit('open');
+
+    // FakeSocket.terminate() emits 'close' synchronously — the worst-case race.
+    mock.timers.tick(20_000);
+    assert.ok(sockets[0].closed);
+    assert.equal(timers.count(), 1, 'watchdog + close handler scheduled only one reconnect timer');
+
+    mock.timers.tick(3_000);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    assert.equal(mint.mock.callCount(), 2, 'exactly one reconnect attempt');
+    assert.equal(sockets.length, 2);
+
+    // Nothing else pending.
+    mock.timers.tick(120_000);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    assert.equal(mint.mock.callCount(), 2);
+    assert.equal(sockets.length, 2);
+    assert.ok(!sockets[1].closed);
+    client.dispose();
+  } finally {
+    timers.restore();
+  }
+});
+
+test('client: late close from a watchdog-terminated socket does not disturb the new socket', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
+  const tickets = [TICKET_A, TICKET_B, 'tkt_CCCCCCCCCCCCCCCCCCCCCCCC'];
+  const mint = mock.fn(async () => tickets.shift()!);
+  const { client, sockets } = makeClient(mint);
+  await client.connect();
+  const first = sockets[0];
+  // Real `ws` emits 'close' asynchronously after terminate(); model that.
+  first.terminate = () => { first.readyState = 3; };
+  first.close = () => { first.readyState = 3; };
+  first.readyState = 1;
+  first.emit('open');
+
+  mock.timers.tick(20_000); // watchdog trips
+  mock.timers.tick(3_000);  // reconnect fires
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(sockets.length, 2);
+  sockets[1].readyState = 1;
+  sockets[1].emit('open');
+
+  // The dead socket's close finally arrives — must be ignored.
+  first.emit('close', 1006, Buffer.from(''));
+  first.emit('error', new Error('late'));
+  mock.timers.tick(10_000);
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+
+  assert.equal(mint.mock.callCount(), 2, 'stale close did not trigger another reconnect');
+  assert.equal(sockets.length, 2);
+  assert.ok(!sockets[1].closed);
+  assert.equal(client.isConnected, true);
+  client.dispose();
+});
+
+test('client: watchdog uses terminate() and detaches the socket first', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
+  const { client, sockets } = makeClient(async () => TICKET_A);
+  await client.connect();
+  const s = sockets[0];
+  let wsWhileTerminating: unknown = 'unset';
+  s.terminate = () => {
+    wsWhileTerminating = (client as any).ws;
+    FakeSocket.prototype.close.call(s);
+  };
+  s.readyState = 1;
+  s.emit('open');
+  mock.timers.tick(20_000);
+  assert.equal(wsWhileTerminating, null, 'socket was detached before terminate()');
+  assert.ok(s.closed);
+  client.dispose();
+});
