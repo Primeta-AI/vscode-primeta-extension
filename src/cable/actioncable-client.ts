@@ -1,5 +1,5 @@
-import * as vscode from 'vscode';
 import WebSocket from 'ws';
+import { CableTicketError, cableUrlForTicket, mintCableTicket, serverBase } from './cable-ticket';
 
 export interface SpeakMessage {
   text: string;
@@ -17,6 +17,29 @@ export interface PersonaChangedMessage {
   persona_name: string;
 }
 
+export interface CableSettings {
+  serverUrl: string;
+  apiToken: string;
+}
+
+/** Minimal surface of a `ws` WebSocket that this client uses (mockable in tests). */
+export interface CableSocket {
+  readyState: number;
+  on(event: string, listener: (...args: any[]) => void): unknown;
+  send(data: string): void;
+  close(): void;
+  terminate?(): void;
+}
+
+export interface ActionCableDeps {
+  /** Read current settings (VS Code configuration in production). */
+  getSettings: () => CableSettings;
+  /** Exchange the API token for a one-time cable ticket. */
+  mintTicket?: (serverUrl: string, apiToken: string) => Promise<string>;
+  /** Open the WebSocket. */
+  createSocket?: (url: string, protocols: string[], opts: { origin: string }) => CableSocket;
+}
+
 export interface ActionCableCallbacks {
   onMessage: (msg: SpeakMessage) => void;
   onPersonaChanged: (msg: PersonaChangedMessage) => void;
@@ -26,7 +49,9 @@ export interface ActionCableCallbacks {
 /**
  * Lightweight ActionCable client for Node.js.
  * Connects to the Rails server's WebSocket endpoint,
- * authenticates via bridge_api_token, and subscribes
+ * authenticates with a short-lived one-time ticket (minted per connection
+ * attempt via POST /cable/tickets — the API token never goes in the URL),
+ * and subscribes
  * to VscodeTtsChannel for assistant messages + bridge events.
  *
  * Subscribes to two streams:
@@ -41,9 +66,13 @@ export interface ActionCableCallbacks {
 // extension to recover.
 const HEARTBEAT_TIMEOUT_MS = 15_000;
 const HEARTBEAT_CHECK_INTERVAL_MS = 5_000;
+const RECONNECT_DELAY_MS = 3_000;
+// A 401/403 from the ticket endpoint means the token is bad or revoked;
+// don't hammer the server every 3s.
+const AUTH_FAILURE_RECONNECT_DELAY_MS = 60_000;
 
 export class ActionCableClient {
-  private ws: WebSocket | null = null;
+  private ws: CableSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastInboundAt = 0;
@@ -51,38 +80,73 @@ export class ActionCableClient {
   private bridgeName: string | null = null;
   private channelIdentifier: string = '';
   private callbacks: ActionCableCallbacks;
+  private deps: Required<ActionCableDeps>;
+  // Bumped on every connect attempt and on dispose so a slow ticket mint
+  // can't open a socket for a superseded attempt.
+  private attempt = 0;
 
-  constructor(callbacks: ActionCableCallbacks) {
+  constructor(callbacks: ActionCableCallbacks, deps: ActionCableDeps) {
     this.callbacks = callbacks;
+    this.deps = {
+      getSettings: deps.getSettings,
+      mintTicket: deps.mintTicket ?? ((serverUrl, apiToken) => mintCableTicket(serverUrl, apiToken)),
+      createSocket: deps.createSocket
+        ?? ((url, protocols, opts) => new WebSocket(url, protocols, opts) as unknown as CableSocket),
+    };
   }
 
-  connect(bridgeName?: string) {
+  /**
+   * Mint a fresh one-time ticket, then open the socket with it. Resolves once
+   * the socket has been created (or the attempt was abandoned/failed — failures
+   * schedule a reconnect, which mints again).
+   */
+  async connect(bridgeName?: string): Promise<void> {
     if (this.disposed) return;
 
     this.bridgeName = bridgeName || null;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const attempt = ++this.attempt;
 
-    const config = vscode.workspace.getConfiguration('primeta');
-    const serverUrl = config.get<string>('serverUrl', 'https://primeta.ai');
-    const apiToken = config.get<string>('apiToken', '');
-
+    const { serverUrl, apiToken } = this.deps.getSettings();
     if (!apiToken) return;
 
-    const origin = serverUrl.replace(/\/$/, '');
-    const wsUrl = origin
-      .replace(/^https:/, 'wss:')
-      .replace(/^http:/, 'ws:') + `/cable?bridge_token=${apiToken}`;
+    const origin = serverBase(serverUrl);
+
+    let ticket: string;
+    try {
+      ticket = await this.deps.mintTicket(serverUrl, apiToken);
+    } catch (err) {
+      if (this.disposed || attempt !== this.attempt) return;
+      const authFailure = err instanceof CableTicketError && err.isAuthFailure;
+      // Message is token-free by construction (see cable-ticket.ts).
+      console.error('[Primeta cable] Ticket mint failed:', (err as Error)?.message);
+      // No fallback to ?bridge_token= — just retry later with a fresh mint.
+      this.scheduleReconnect(authFailure ? AUTH_FAILURE_RECONNECT_DELAY_MS : RECONNECT_DELAY_MS);
+      return;
+    }
+    if (this.disposed || attempt !== this.attempt) return;
+
+    // Drop any previous socket so its close event doesn't trigger a
+    // duplicate reconnect.
+    this.teardownSocket();
 
     // Rails' ActionCable checks the Origin header against
     // `allowed_request_origins`; Node's ws library doesn't send one by
     // default, so the upgrade comes back as 404. Pass it explicitly.
-    this.ws = new WebSocket(wsUrl, ['actioncable-v1-json'], { origin });
+    const ws = this.deps.createSocket(cableUrlForTicket(serverUrl, ticket), ['actioncable-v1-json'], { origin });
+    this.ws = ws;
 
-    this.ws.on('open', () => {
+    ws.on('open', () => {
+      if (this.ws !== ws) return;
       this.lastInboundAt = Date.now();
       this.startHeartbeatWatchdog();
     });
 
-    this.ws.on('message', (data: WebSocket.Data) => {
+    ws.on('message', (data: WebSocket.Data) => {
+      if (this.ws !== ws) return;
       this.lastInboundAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
@@ -90,20 +154,31 @@ export class ActionCableClient {
       } catch {}
     });
 
-    this.ws.on('close', (code: number, reason: Buffer) => {
+    ws.on('close', (code: number, reason: Buffer) => {
+      if (this.ws !== ws) return;
       console.error('[Primeta cable] WS close', code, reason?.toString());
       this.stopHeartbeatWatchdog();
+      this.ws = null;
       this.scheduleReconnect();
     });
 
-    this.ws.on('error', (err: Error) => {
+    ws.on('error', (err: Error) => {
       console.error('[Primeta cable] WS error', err.message);
-      this.ws?.close();
+      try { ws.close(); } catch {}
     });
 
-    this.ws.on('unexpected-response', (_req: unknown, res: { statusCode?: number }) => {
+    ws.on('unexpected-response', (_req: unknown, res: { statusCode?: number }) => {
       console.error('[Primeta cable] WS unexpected-response', res?.statusCode);
     });
+  }
+
+  private teardownSocket() {
+    this.stopHeartbeatWatchdog();
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      try { old.close(); } catch {}
+    }
   }
 
   private handleMessage(msg: any) {
@@ -235,9 +310,14 @@ export class ActionCableClient {
     }
   }
 
-  private scheduleReconnect() {
+  private scheduleReconnect(delayMs = RECONNECT_DELAY_MS) {
     if (this.disposed) return;
-    this.reconnectTimer = setTimeout(() => this.connect(this.bridgeName || undefined), 3000);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    // connect() mints a brand-new ticket — tickets are one-time use.
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect(this.bridgeName || undefined);
+    }, delayMs);
   }
 
   private startHeartbeatWatchdog() {
@@ -265,11 +345,11 @@ export class ActionCableClient {
 
   dispose() {
     this.disposed = true;
-    this.stopHeartbeatWatchdog();
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    this.attempt++;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
+    this.teardownSocket();
   }
 }
