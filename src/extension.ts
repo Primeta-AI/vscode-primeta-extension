@@ -70,6 +70,14 @@ export function activate(context: vscode.ExtensionContext) {
         onBridgeStatus: (msg) => {
           handleBridgeStatus(msg.event, msg.bridge_name);
         },
+      }, {
+        getSettings: () => {
+          const config = vscode.workspace.getConfiguration('primeta');
+          return {
+            serverUrl: config.get<string>('serverUrl', 'https://primeta.ai'),
+            apiToken: config.get<string>('apiToken', ''),
+          };
+        },
       });
 
       panel.setCableClient(cableClient);
@@ -80,7 +88,7 @@ export function activate(context: vscode.ExtensionContext) {
       });
 
       // Connect to WebSocket immediately (no bridge name yet — user-wide events only)
-      cableClient.connect();
+      void cableClient.connect();
 
       // Try to find and auto-connect to a matching bridge
       autoConnectBridge();

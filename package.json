@@ -98,7 +98,8 @@
     "watch": "npm run watch:ext & npm run watch:webview",
     "watch:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
     "watch:webview": "esbuild webview/avatar-renderer.js --bundle --outfile=dist/webview.js --format=iife --platform=browser --sourcemap --define:global=globalThis --watch",
-    "package": "npm run build && vsce package"
+    "package": "npm run build && vsce package",
+    "test": "esbuild test/*.test.ts --bundle --outdir=out-test --format=cjs --platform=node --external:ws && node --test out-test/*.test.js"
   },
   "dependencies": {
     "@primeta/persona-core": "file:./vendor/persona-core",

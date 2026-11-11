@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+
+- The WebSocket connection no longer puts your long-lived API token in the URL (`/cable?bridge_token=…`), where it could land in proxy/server access logs. The extension now exchanges the token — sent only in an `Authorization: Bearer` header — for a one-time, 60-second ticket via `POST /cable/tickets`, and connects with `/cable?ticket=…`. Every connect and reconnect mints a fresh ticket. If minting fails the extension does **not** fall back to the old URL; it retries later (3s, or 60s after a 401/403)
+- Ticket requests refuse redirects so the bearer token is never forwarded to another host
+
+### Release ordering
+
+- Ship this release only **after** the Primeta server change adding `POST /cable/tickets` (primeta PR #66) is deployed — against an older server, ticket minting fails and the panel won't connect. Already-installed older versions of the extension keep working, because the server still accepts the legacy `?bridge_token=` parameter
+
+### Development
+
+- Added `npm test` (esbuild + `node:test`) with unit tests for ticket minting and the cable client's connect/reconnect paths
+
 ## [0.2.4] - 2026-04-27
 
 ### Fixed
